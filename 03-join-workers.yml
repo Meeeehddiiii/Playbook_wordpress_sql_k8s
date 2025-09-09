@@ -1,0 +1,6 @@
+---
+- hosts: workers
+  become: true
+  tasks:
+    - name: Exécuter la commande de join
+      shell: "{{ lookup('file', 'join-command.sh') }} --cri-socket unix:///run/containerd/containerd.sock"

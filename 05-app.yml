@@ -1,0 +1,187 @@
+---
+- hosts: master
+  become: true
+  vars:
+    ns: "wp-project1"
+    nfs_server_ip: "10.10.1.6"
+  tasks:
+    - name: Créer namespace
+      shell: |
+        kubectl get ns { ns } || kubectl create ns { ns }
+
+    - name: Créer Secret (identifiants MySQL)
+      shell: |
+        kubectl -n { ns } create secret generic mysql-secret \              --from-literal=MYSQL_ROOT_PASSWORD='Str0ngRoot!' \              --from-literal=MYSQL_USER='wpuser' \              --from-literal=MYSQL_PASSWORD='Str0ngPass!' \              --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Créer ConfigMap (valeurs non sensibles)
+      shell: |
+        kubectl -n { ns } apply -f - <<'EOF'
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: wp-config
+        data:
+          WORDPRESS_DB_HOST: mysql
+          WORDPRESS_DB_NAME: wordpress
+        EOF
+
+    - name: PV/PVC MySQL + WordPress (NFS statique)
+      shell: |
+        cat <<EOF | kubectl apply -f -
+        apiVersion: v1
+        kind: PersistentVolume
+        metadata:
+          name: pv-mysql
+          labels: { app: mysql }
+        spec:
+          capacity: { storage: 10Gi }
+          accessModes: ["ReadWriteOnce"]
+          nfs:
+            server: { nfs_server_ip }
+            path: /srv/nfs/mysql
+          persistentVolumeReclaimPolicy: Retain
+        ---
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: pvc-mysql
+          namespace: { ns }
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources: { requests: { storage: 10Gi } }
+          selector:
+            matchLabels: { app: mysql }
+        ---
+        apiVersion: v1
+        kind: PersistentVolume
+        metadata:
+          name: pv-wordpress
+          labels: { app: wordpress }
+        spec:
+          capacity: { storage: 10Gi }
+          accessModes: ["ReadWriteMany"]
+          nfs:
+            server: { nfs_server_ip }
+            path: /srv/nfs/wordpress
+          persistentVolumeReclaimPolicy: Retain
+        ---
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          name: pvc-wordpress
+          namespace: { ns }
+        spec:
+          accessModes: ["ReadWriteMany"]
+          resources: { requests: { storage: 10Gi } }
+          selector:
+            matchLabels: { app: wordpress }
+        EOF
+
+    - name: Déployer MySQL (attendu par WordPress)
+      shell: |
+        kubectl -n { ns } apply -f - <<'EOF'
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: mysql
+          labels: { app: mysql }
+        spec:
+          replicas: 1
+          selector: { matchLabels: { app: mysql } }
+          template:
+            metadata: { labels: { app: mysql } }
+            spec:
+              containers:
+                - name: mysql
+                  image: mysql:8.0
+                  ports: [{ containerPort: 3306 }]
+                  env:
+                    - name: MYSQL_ROOT_PASSWORD
+                      valueFrom:
+                        secretKeyRef: { name: mysql-secret, key: MYSQL_ROOT_PASSWORD }
+                    - name: MYSQL_USER
+                      valueFrom:
+                        secretKeyRef: { name: mysql-secret, key: MYSQL_USER }
+                    - name: MYSQL_PASSWORD
+                      valueFrom:
+                        secretKeyRef: { name: mysql-secret, key: MYSQL_PASSWORD }
+                    - name: MYSQL_DATABASE
+                      valueFrom:
+                        configMapKeyRef: { name: wp-config, key: WORDPRESS_DB_NAME }
+                  resources:
+                    requests: { cpu: "200m", memory: "512Mi" }
+                    limits:   { cpu: "1",    memory: "1Gi" }
+                  volumeMounts:
+                    - name: mysql-data
+                      mountPath: /var/lib/mysql
+              volumes:
+                - name: mysql-data
+                  persistentVolumeClaim: { claimName: pvc-mysql }
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: mysql
+        spec:
+          type: ClusterIP
+          selector: { app: mysql }
+          ports: [{ port: 3306, targetPort: 3306 }]
+        EOF
+
+    - name: Déployer WordPress (attend MySQL via initContainer)
+      shell: |
+        kubectl -n { ns } apply -f - <<'EOF'
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: wordpress
+          labels: { app: wordpress }
+        spec:
+          replicas: 2
+          selector: { matchLabels: { app: wordpress } }
+          template:
+            metadata: { labels: { app: wordpress } }
+            spec:
+              initContainers:
+                - name: wait-mysql
+                  image: busybox:1.36
+                  command: ['sh', '-c', "until nslookup mysql && (nc -z mysql 3306 || wget -qO- http://mysql:3306 >/dev/null 2>&1); do echo 'waiting for mysql'; sleep 2; done"]
+              containers:
+                - name: wordpress
+                  image: wordpress:6.5-php8.2-apache
+                  ports: [{ containerPort: 80 }]
+                  env:
+                    - name: WORDPRESS_DB_HOST
+                      valueFrom:
+                        configMapKeyRef: { name: wp-config, key: WORDPRESS_DB_HOST }
+                    - name: WORDPRESS_DB_NAME
+                      valueFrom:
+                        configMapKeyRef: { name: wp-config, key: WORDPRESS_DB_NAME }
+                    - name: WORDPRESS_DB_USER
+                      valueFrom:
+                        secretKeyRef: { name: mysql-secret, key: MYSQL_USER }
+                    - name: WORDPRESS_DB_PASSWORD
+                      valueFrom:
+                        secretKeyRef: { name: mysql-secret, key: MYSQL_PASSWORD }
+                  resources:
+                    requests: { cpu: "100m", memory: "256Mi" }
+                    limits:   { cpu: "500m", memory: "512Mi" }
+                  volumeMounts:
+                    - name: wp-content
+                      mountPath: /var/www/html
+              volumes:
+                - name: wp-content
+                  persistentVolumeClaim: { claimName: pvc-wordpress }
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: wordpress
+        spec:
+          type: NodePort
+          selector: { app: wordpress }
+          ports:
+            - port: 80
+              targetPort: 80
+              nodePort: 30080
+        EOF

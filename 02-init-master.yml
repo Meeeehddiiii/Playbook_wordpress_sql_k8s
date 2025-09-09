@@ -1,0 +1,30 @@
+---
+- hosts: master
+  become: true
+  vars:
+    pod_cidr: 10.244.0.0/16
+  tasks:
+    - name: kubeadm init
+      command: kubeadm init --pod-network-cidr={{ pod_cidr }}
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Configurer kubectl pour l'utilisateur
+      command: bash -lc "mkdir -p $HOME/.kube && cp -i /etc/kubernetes/admin.conf $HOME/.kube/config && chown $(id -u):$(id -g) $HOME/.kube/config"
+
+    - name: Installer CNI (Flannel)
+      command: bash -lc "kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/v0.25.5/Documentation/kube-flannel.yml"
+
+    - name: Récupérer la commande de join
+      command: kubeadm token create --print-join-command
+      register: join_cmd
+
+    - name: Afficher la commande de join
+      debug:
+        msg: "{{ join_cmd.stdout }}"
+
+    - name: Sauver la commande de join côté control machine
+      local_action:
+        module: copy
+        content: "{{ join_cmd.stdout }}\n"
+        dest: join-command.sh

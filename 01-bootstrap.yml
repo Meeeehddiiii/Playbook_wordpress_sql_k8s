@@ -1,0 +1,92 @@
+---
+- hosts: all
+  become: true
+  tasks:
+    - name: Désactiver le swap (exigé par k8s)
+      command: swapoff -a
+
+    - name: Supprimer fstab swap
+      replace:
+        path: /etc/fstab
+        regexp: '^(.*\sswap\s.*)$'
+        replace: '# \1'
+
+    - name: Prérequis réseau pour k8s
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Charger modules
+      command: modprobe {{ item }}
+      loop: [overlay, br_netfilter]
+
+    - name: Sysctl pour k8s
+      copy:
+        dest: /etc/sysctl.d/99-kubernetes-cri.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+
+    - name: Appliquer sysctl
+      command: sysctl --system
+
+    - name: Paquets de base
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - nfs-common
+        update_cache: true
+        state: present
+
+    - name: Installer containerd
+      apt:
+        name: containerd
+        state: present
+
+    - name: Générer config containerd
+      command: bash -lc "mkdir -p /etc/containerd && containerd config default | sudo tee /etc/containerd/config.toml"
+
+    - name: Activer SystemdCgroup pour containerd
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+
+    - name: Redémarrer containerd
+      service:
+        name: containerd
+        state: restarted
+        enabled: true
+
+    - name: Ajouter clé APT Kubernetes
+      apt_key:
+        url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+        state: present
+
+    - name: Ajouter repo APT Kubernetes
+      apt_repository:
+        repo: "deb https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /"
+        state: present
+
+    - name: Installer kubeadm, kubelet, kubectl
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        update_cache: true
+        state: present
+
+    - name: Bloquer versions k8s
+      apt:
+        name: [kubelet, kubeadm, kubectl]
+        state: present
+        allow_downgrade: yes
+        mark: hold

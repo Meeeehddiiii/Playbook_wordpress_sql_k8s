@@ -1,0 +1,47 @@
+---
+- hosts: nfs
+  become: true
+  vars:
+    nfs_exports:
+      - { path: /srv/nfs/mysql,     opts: "*(rw,sync,no_subtree_check,no_root_squash)" }
+      - { path: /srv/nfs/wordpress, opts: "*(rw,sync,no_subtree_check,no_root_squash)" }
+  tasks:
+    - name: Installer NFS serveur
+      apt:
+        name: nfs-kernel-server
+        state: present
+
+    - name: Créer répertoires d'export
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: nobody
+        group: nogroup
+        mode: '0777'
+      loop: "{{ nfs_exports }}"
+
+    - name: Configurer /etc/exports
+      blockinfile:
+        path: /etc/exports
+        create: yes
+        block: |
+          {% for exp in nfs_exports %}
+          {{ exp.path }} {{ exp.opts }}
+          {% endfor %}
+
+    - name: Recharger exports
+      command: exportfs -ra
+
+    - name: Redémarrer NFS
+      service:
+        name: nfs-kernel-server
+        state: restarted
+        enabled: true
+
+- hosts: all
+  become: true
+  tasks:
+    - name: Installer client NFS
+      apt:
+        name: nfs-common
+        state: present
