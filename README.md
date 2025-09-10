@@ -1,12 +1,15 @@
 # Playbook_wordpress_sql_k8s
 Cahier des charges — Projet 2
+
 Automatisation de la mise en production de WordPress via Ansible et Kubernetes
 Agenda
 Déployer WordPress et MySQL sur Kubernetes, en utilisant des volumes persistants fournis
 par un serveur NFS, et assurer la résilience de l’application.
 Description
+
 L’organisation a besoin d’une plateforme WordPress fonctionnelle appuyée sur une base
 MySQL.
+
 · WordPress doit être déployé avec un service NodePort pour être accessible depuis
 l’extérieur.
 · MySQL doit être déployé avec un volume persistant hébergé sur un serveur NFS.
@@ -19,11 +22,15 @@ Outils nécessaires
 · Container runtime (containerd)
 · NFS (serveur + clients)
 · ETCD (sauvegarde du cluster)
-Prérequis
+
+
+Prérequis:
 · Un cluster Kubernetes à 3 nœuds (1 master, 2 workers) installé via kubeadm.
 · Accès SSH aux nœuds via Ansible.
 · Un serveur NFS configuré sur le cluster.
-Objectifs du projet
+
+
+Objectifs du projet:
 · Installer Ansible et préparer l’automatisation.
 · Déployer un cluster Kubernetes de 3 nœuds.
 · Mettre en place une application multi-tiers WordPress + MySQL.
@@ -39,7 +46,9 @@ données.
 · WordPress doit attendre que le service MySQL soit disponible pour démarrer.
 · L’application doit être accessible depuis Internet via le NodePort exposé.
 · Toutes les ressources doivent être isolées dans le namespace wp-project1.
-Démarche réalisée
+
+
+Démarche réalisée:
 1. Installation d’Ansible.
 2. Installation et configuration d’un cluster Kubernetes de 3 nœuds (1 master, 2 workers).
 3. Déploiement initial de pods/tests pour vérifier le cluster.
@@ -56,5 +65,7 @@ Démarche réalisée
 · Résolution DNS interne fonctionnelle
 · Connexion DB WordPress → MySQL OK
 · HTTP accessible depuis le cluster et depuis l’extérieur (IP publique du worker).
+
+
 Résultat attendu : WordPress opérationnel et accessible depuis Internet, avec
 stockage persistant NFS et sauvegarde ETCD disponible.
